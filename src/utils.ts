@@ -11,6 +11,20 @@ export const tryParse = <T>(text: string): ParseResult<T> => {
     }
 }
 
+export async function retry<T>(
+    fn: () => Promise<T>,
+    retries: number,
+    delay: number
+): Promise<T> {
+    try {
+        return await fn()
+    } catch (error) {
+        if (retries <= 0) throw error
+        await new Promise((resolve) => setTimeout(resolve, delay))
+        return retry(fn, retries - 1, delay * 2)
+    }
+}
+
 export const extractors = [
     (text: string) => text.trim(),
     (text: string) =>

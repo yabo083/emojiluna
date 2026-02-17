@@ -43,6 +43,15 @@ export const Config = Schema.intersect([
     }).description('AI功能配置'),
 
     Schema.object({
+        batchSize: Schema.number().default(6).description('每次上传/处理的最大批量大小'),
+        aiConcurrency: Schema.number().default(3).description('AI分析并发限制'),
+        aiBatchDelay: Schema.number().default(1000).description('AI分析批次间延迟(ms)'),
+        retryAttempts: Schema.number().default(3).description('AI分析最大重试次数'),
+        retryBackoff: Schema.number().default(1000).description('AI分析重试初始退避时间(ms)'),
+        enableDeduplication: Schema.boolean().default(true).description('启用图片哈希去重(减少AI调用)'),
+    }).description('性能与可靠性配置'),
+
+    Schema.object({
         categorizePrompt: Schema.string()
             .role('textarea')
             .default(

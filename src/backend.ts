@@ -3,8 +3,9 @@ import { Config, EmojiAddOptions, FolderImportOptions } from '.'
 import type {} from '@koishijs/plugin-server'
 import fs from 'fs/promises'
 import type {} from '@koishijs/plugin-console'
-import { resolve } from 'path'
+import { resolve, join } from 'path'
 import { getImageType } from './utils'
+import formidable from 'formidable'
 
 export async function applyBackend(ctx: Context, config: Config) {
     if (config.injectVariables) {
@@ -160,7 +161,7 @@ export async function applyBackend(ctx: Context, config: Config) {
                             category: category || '其他',
                             tags: tags || []
                         },
-                        buffer
+                        source: buffer
                     }
                 })
 
@@ -244,15 +245,9 @@ export async function applyBackend(ctx: Context, config: Config) {
             }
         )
 
-        ctx.console.addListener(
-            'emojiluna/importFromFolder',
-            async (options: FolderImportOptions) => {
-                if (!options?.folderPath) {
-                    throw new Error('文件夹路径不能为空')
-                }
-                return await ctx.emojiluna.importFromFolder(options)
-            }
-        )
+        ctx.console.addListener('emojiluna/getTaskStats' as any, async () => {
+            return await ctx.emojiluna.getTaskStats()
+        })
     })
 
     ctx.inject(['server', 'emojiluna'], async (ctx) => {
@@ -264,6 +259,75 @@ export async function applyBackend(ctx: Context, config: Config) {
             koa.set('Content-Type', 'application/json')
 
             koa.body = JSON.stringify(emojis)
+        })
+
+        ctx.server.post(`${config.backendPath}/upload`, async (koa) => {
+            const tempDir = join(ctx.baseDir, config.storagePath, 'temp')
+            await fs.mkdir(tempDir, { recursive: true })
+
+            const form = formidable({
+                multiples: true,
+                maxFileSize: 50 * 1024 * 1024,
+                keepExtensions: true,
+                uploadDir: tempDir
+            })
+
+            try {
+                const [fields, files] = await new Promise<[any, any]>(
+                    (resolve, reject) => {
+                        form.parse(koa.req, (err, fields, files) => {
+                            if (err) reject(err)
+                            else resolve([fields, files])
+                        })
+                    }
+                )
+
+                const aiAnalysis = fields.aiAnalysis?.[0] === 'true'
+                const category = fields.category?.[0] || '其他'
+                let tags = fields.tags || fields['tags[]']
+                if (!tags) tags = []
+                if (!Array.isArray(tags)) tags = [tags]
+
+                let uploadedFiles =
+                    files.file || files.files || Object.values(files)[0]
+                if (!uploadedFiles) {
+                    koa.status = 400
+                    koa.body = 'No files uploaded'
+                    return
+                }
+                if (!Array.isArray(uploadedFiles)) {
+                    uploadedFiles = [uploadedFiles]
+                }
+
+                const emojisToAdd = uploadedFiles.map((file) => ({
+                    options: {
+                        name:
+                            file.originalFilename?.replace(/\.[^/.]+$/, '') ||
+                            'unknown',
+                        category,
+                        tags
+                    },
+                    source: file.filepath
+                }))
+
+                const results = await ctx.emojiluna.addEmojis(
+                    emojisToAdd,
+                    aiAnalysis
+                )
+
+                koa.status = 200
+                koa.set('Content-Type', 'application/json')
+                koa.body = JSON.stringify({
+                    success: true,
+                    count: results.length
+                })
+            } catch (err) {
+                koa.status = 500
+                koa.body = JSON.stringify({
+                    success: false,
+                    error: err.message
+                })
+            }
         })
 
         ctx.server.get(`${config.backendPath}/search`, async (koa) => {

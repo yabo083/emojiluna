@@ -1,109 +1,117 @@
 {
-    "name": "koishi-plugin-emojiluna",
-    "description": "Smart emoji management plugin with AI categorization",
-    "version": "1.1.6",
-    "main": "lib/index.js",
-    "typings": "lib/index.d.ts",
-    "types": "lib/index.d.ts",
-    "files": [
-        "lib",
-        "dist"
-    ],
-    "license": "MIT",
-    "keywords": [
-        "koishi",
-        "plugin",
-        "service",
-        "emoji",
-        "management",
-        "ai",
-        "categorization"
-    ],
-    "author": "emojiluna",
-    "repository": {
-        "type": "git",
-        "url": "https://github.com/ChatLunaLab/emojiluna.git",
-        "directory": "."
-    },
-    "dependencies": {
-        "@element-plus/icons-vue": "^2.3.2",
-        "@jimp/core": "^1.6.0",
-        "@koishijs/plugin-console": "^5.30.11",
-        "@langchain/core": "^0.3.80",
-        "gifuct-js": "^2.1.2",
-        "jimp": "^1.6.0",
-        "vue-i18n": "^11.1.12",
-        "vue-router": "^4.5.1"
-    },
-    "resolutions": {
-        "@langchain/core": "^0.3.80",
-        "js-tiktoken": "npm:@dingyi222666/js-tiktoken@^1.0.21"
-    },
+  "name": "koishi-plugin-emojiluna",
+  "description": "Smart emoji management plugin with AI categorization",
+  "version": "1.1.6",
+  "main": "lib/index.js",
+  "typings": "lib/index.d.ts",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "dist"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "koishi",
+    "plugin",
+    "service",
+    "emoji",
+    "management",
+    "ai",
+    "categorization"
+  ],
+  "author": "emojiluna",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ChatLunaLab/emojiluna.git",
+    "directory": "."
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
+    "@jimp/core": "^1.6.0",
+    "@koishijs/plugin-console": "^5.30.11",
+    "@langchain/core": "0.3.62",
+    "@types/formidable": "^2.0.6",
+    "formidable": "^2.1.5",
+    "gifuct-js": "^2.1.2",
+    "jimp": "^1.6.0",
+    "vue-i18n": "^11.1.12",
+    "vue-router": "^4.5.1"
+  },
+  "resolutions": {
+    "@langchain/core": "0.3.62",
+    "js-tiktoken": "npm:@dingyi222666/js-tiktoken@^1.0.21"
+  },
+  "pnpm": {
     "overrides": {
-        "@langchain/core": "^0.3.80",
-        "js-tiktoken": "npm:@dingyi222666/js-tiktoken@^1.0.21"
-    },
-    "pnpm": {
-        "overrides": {
-            "@langchain/core": "^0.3.80",
-            "js-tiktoken": "npm:@dingyi222666/js-tiktoken@^1.0.21"
-        }
-    },
-    "devDependencies": {
-        "@koishijs/client": "^5.30.11",
-        "@typescript-eslint/eslint-plugin": "^7.18.1-alpha.3",
-        "@typescript-eslint/parser": "^8.45.1-alpha.0",
-        "esbuild": "^0.25.10",
-        "esbuild-register": "npm:@shigma/esbuild-register@^1.1.1",
-        "eslint": "^8.57.1",
-        "eslint-config-prettier": "^9.1.2",
-        "eslint-config-standard": "^17.1.0",
-        "eslint-plugin-import": "^2.32.0",
-        "eslint-plugin-n": "^16.6.2",
-        "eslint-plugin-prettier": "^5.5.4",
-        "eslint-plugin-promise": "^7.2.1",
-        "yakumo": "^1.0.0",
-        "yakumo-esbuild": "^1.0.0",
-        "yakumo-mocha": "^1.0.0",
-        "yakumo-tsc": "^1.0.0"
-    },
-    "peerDependencies": {
-        "@koishijs/plugin-console": "^5.30.11",
-        "@koishijs/plugin-server": "^3.2.7",
-        "koishi": "^4.18.9",
-        "koishi-plugin-chatluna": "^1.3.0-alpha.49"
-    },
-    "peerDependenciesMeta": {
-        "@koishijs/plugin-server": {
-            "optional": true
-        }
-    },
-    "engines": {
-        "node": ">=18.0.0"
-    },
-    "scripts": {
-        "build": "yarn yakumo build",
-        "bump": "yarn yakumo version",
-        "dep": "yarn yakumo upgrade",
-        "pub": "yarn yakumo publish",
-        "lint": "yarn eslint src --ext=ts",
-        "lint-fix": "yarn eslint src --ext=ts --fix"
-    },
-    "koishi": {
-        "description": {
-            "zh": "表情包管理插件，支持自动获取群聊表情包，AI(ChatLuna)自动分类、标签管理和快速搜索"
-        },
-        "service": {
-            "implements": [
-                "emojiluna"
-            ],
-            "required": [
-                "chatluna"
-            ],
-            "optional": [
-                "server",
-                "console"
-            ]
-        }
+      "@langchain/core": "0.3.62",
+      "js-tiktoken": "npm:@dingyi222666/js-tiktoken@^1.0.21"
     }
+  },
+  "devDependencies": {
+    "@koishijs/client": "^5.30.11",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "esbuild": "^0.25.10",
+    "esbuild-register": "npm:@shigma/esbuild-register@^1.1.1",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-n": "^17.24.0",
+    "eslint-plugin-prettier": "^5.5.5",
+    "eslint-plugin-promise": "^7.2.1",
+    "koishi-plugin-chatluna": "^1.3.5",
+    "yakumo": "^1.0.0",
+    "yakumo-esbuild": "^1.0.0",
+    "yakumo-mocha": "^1.0.0",
+    "yakumo-tsc": "^1.0.0"
+  },
+  "peerDependencies": {
+    "@koishijs/plugin-console": "^5.30.11",
+    "@koishijs/plugin-server": "^3.2.7",
+    "koishi": "^4.18.9",
+    "koishi-plugin-chatluna": "^1.3.5"
+  },
+  "peerDependenciesMeta": {
+    "@koishijs/plugin-server": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "yarn yakumo build",
+    "bump": "yarn yakumo version",
+    "dep": "yarn yakumo upgrade",
+    "pub": "yarn yakumo publish",
+    "lint": "yarn eslint src --ext=ts",
+    "lint-fix": "yarn eslint src --ext=ts --fix"
+  },
+  "koishi": {
+    "description": {
+      "zh": "表情包管理插件，支持自动获取群聊表情包，AI(ChatLuna)自动分类、标签管理和快速搜索"
+    },
+    "service": {
+      "implements": [
+        "emojiluna"
+      ],
+      "required": [
+        "chatluna"
+      ],
+      "optional": [
+        "server",
+        "console"
+      ]
+    },
+    "services": {
+      "optional": [
+        "chatluna",
+        "chatluna"
+      ]
+    }
+  },
+  "overrides": {
+    "@langchain/core": "0.3.62",
+    "js-tiktoken": "npm:@dingyi222666/js-tiktoken@^1.0.21"
+  }
 }
