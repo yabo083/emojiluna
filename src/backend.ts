@@ -5,6 +5,8 @@ import fs from 'fs/promises'
 import type {} from '@koishijs/plugin-console'
 import { resolve } from 'path'
 import { getImageType } from './utils'
+import formidable from 'formidable'
+import { IncomingMessage } from 'http'
 
 export async function applyBackend(ctx: Context, config: Config) {
     if (config.injectVariables) {
@@ -233,6 +235,37 @@ export async function applyBackend(ctx: Context, config: Config) {
             }
         })
 
+        ctx.console.addListener('emojiluna/getAiTaskStats', async () => {
+             return await ctx.emojiluna.getAiTaskStats()
+        })
+
+        // Return list of emoji ids that have failed AI tasks
+        ctx.console.addListener('emojiluna/getFailedAiEmojiIds', async () => {
+            try {
+                const tasks = await ctx.database.get('emojiluna_ai_tasks', { status: 'failed' })
+                return tasks.map((t: any) => t.emoji_id).filter(Boolean)
+            } catch (e) {
+                ctx.logger.warn(`Failed to fetch failed AI tasks: ${e.message}`)
+                return []
+            }
+        })
+
+        ctx.console.addListener('emojiluna/reanalyzeBatch', async (ids: string[]) => {
+             return await ctx.emojiluna.reanalyzeBatch(ids)
+        })
+
+        ctx.console.addListener('emojiluna/setAiPaused', async (paused: boolean) => {
+             return ctx.emojiluna.setAiPaused(paused)
+        })
+
+        ctx.console.addListener('emojiluna/setRuntimeConfig', async (config: any) => {
+             return ctx.emojiluna.setRuntimeConfig(config)
+        })
+
+        ctx.console.addListener('emojiluna/retryFailedTasks', async () => {
+             return await ctx.emojiluna.retryFailedTasks()
+        })
+
         // Folder import endpoints
         ctx.console.addListener(
             'emojiluna/scanFolder',
@@ -360,6 +393,91 @@ export async function applyBackend(ctx: Context, config: Config) {
             koa.set('Content-Type', mimeType)
             koa.set('Content-Length', emojiBuffer.length.toString())
             koa.body = emojiBuffer
+        })
+
+        ctx.server.post(`${config.backendPath}/upload`, async (koa) => {
+            try {
+                // Check if body is already parsed by upstream middleware (e.g. koa-body)
+                const request = koa.request as any
+                let fields: any = {}
+                let files: any = {}
+                let file: any = null
+
+                if (request.files) {
+                    // Already parsed
+                    fields = request.body || {}
+                    files = request.files
+                    file = Array.isArray(files.file) ? files.file[0] : files.file
+                } else {
+                    // Not parsed, use formidable
+                    const storageDir = resolve(ctx.baseDir, config.storagePath, 'uploads')
+                    await fs.mkdir(storageDir, { recursive: true })
+
+                    const form = formidable({
+                        uploadDir: storageDir,
+                        keepExtensions: true,
+                        maxFileSize: config.maxEmojiSize * 1024 * 1024,
+                        multiples: false
+                    })
+
+                    try {
+                        const [parsedFields, parsedFiles] = await new Promise<[any, any]>((resolve, reject) => {
+                            form.parse(koa.req, (err, fields, files) => {
+                                if (err) reject(err)
+                                else resolve([fields, files])
+                            })
+                        })
+                        fields = parsedFields
+                        files = parsedFiles
+                        file = Array.isArray(files.file) ? files.file[0] : files.file
+                    } catch (err) {
+                        ctx.logger.error(`Formidable parse error: ${err.message}`)
+                        koa.status = 500
+                        koa.body = { success: false, message: `Upload parsing failed: ${err.message}` }
+                        return
+                    }
+                }
+
+                if (!file) {
+                    ctx.logger.error('Upload failed: No file found in request')
+                    throw new Error('No file uploaded')
+                }
+
+                // Extract metadata from fields
+                const name = Array.isArray(fields.name) ? fields.name[0] : fields.name
+                const category = Array.isArray(fields.category) ? fields.category[0] : fields.category
+                const tagsStr = Array.isArray(fields.tags) ? fields.tags[0] : fields.tags
+                const aiAnalysisStr = Array.isArray(fields.aiAnalysis) ? fields.aiAnalysis[0] : fields.aiAnalysis
+                
+                let tags = []
+                try {
+                    tags = tagsStr ? JSON.parse(tagsStr) : []
+                } catch (e) {
+                    ctx.logger.warn(`Failed to parse tags JSON: ${tagsStr}`)
+                }
+                const aiAnalysis = aiAnalysisStr === 'true'
+
+                // Handle file path (formidable vs koa-body/multer differences)
+                // Formidable v3 uses filepath, some others use path
+                const filePath = file.filepath || file.path
+                if (!filePath) {
+                     ctx.logger.error('Upload failed: File object missing path property', file)
+                     throw new Error('Invalid file object received')
+                }
+
+                const emoji = await ctx.emojiluna.addEmojiFromPath({
+                    name: name || file.originalFilename?.replace(/\.[^/.]+$/, "") || file.name?.replace(/\.[^/.]+$/, "") || "uploaded",
+                    category: category || '其他',
+                    tags: tags
+                }, filePath, aiAnalysis)
+
+                koa.status = 200
+                koa.body = { success: true, emoji }
+            } catch (err) {
+                ctx.logger.error(`Upload endpoint error: ${err.message}`, err.stack)
+                koa.status = 500
+                koa.body = { success: false, message: err.message }
+            }
         })
     })
 }

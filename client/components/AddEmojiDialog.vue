@@ -330,33 +330,231 @@ const handleSubmit = async () => {
 const submitFile = async () => {
     if (fileList.value.length === 0) return
 
-    const batchSize = 6
-    for (let i = 0; i < fileList.value.length; i += batchSize) {
-        const batch = fileList.value.slice(i, i + batchSize)
+    // 1) 先用 Worker 计算采样哈希，做同批内去重，避免重复上传
+    try {
+        const filesRaw = fileList.value.filter(f => f.raw).map(f => ({
+            name: f.name.replace(/\.[^/.]+$/, ''),
+            file: f.raw,
+            category: form.category || '其他',
+            tags: JSON.stringify(form.tags),
+            aiAnalysis: form.aiAnalysis
+        }))
 
-        const filesToUpload = batch.map((file) => {
-            return new Promise<EmojiAddOptions>((resolve, reject) => {
-                if (!file.raw) {
-                    return reject(new Error('File object is missing.'))
+        // Hash worker: 使用 crypto.subtle.digest 和采样（head/mid/tail）以降低 IO
+        const hashWorkerScript = `
+        self.onmessage = async (e) => {
+            const { files, sampleSize = 10240, concurrency = 4 } = e.data;
+            const results = [];
+            let idx = 0;
+
+            const readSample = async (file) => {
+                const size = file.size;
+                const needFull = size <= sampleSize * 3;
+                const parts = [];
+                if (needFull) {
+                    parts.push(await file.arrayBuffer());
+                } else {
+                    const head = file.slice(0, sampleSize);
+                    const tail = file.slice(size - sampleSize, size);
+                    const midStart = Math.max(Math.floor(size / 2) - Math.floor(sampleSize / 2), sampleSize);
+                    const mid = file.slice(midStart, midStart + sampleSize);
+                    parts.push(await head.arrayBuffer());
+                    parts.push(await mid.arrayBuffer());
+                    parts.push(await tail.arrayBuffer());
                 }
-                const reader = new FileReader()
-                reader.readAsDataURL(file.raw)
-                reader.onload = () => {
-                    const base64 = (reader.result as string).split(',')[1]
-                    resolve({
-                        name: file.name.replace(/\.[^/.]+$/, ''),
-                        category: form.category || '其他',
-                        tags: form.tags,
-                        imageData: base64,
-                        //mimeType: file.raw.type,
-                    })
+                // concat
+                let totalLen = 0;
+                for (const p of parts) totalLen += p.byteLength;
+                const tmp = new Uint8Array(totalLen);
+                let offset = 0;
+                for (const p of parts) {
+                    tmp.set(new Uint8Array(p), offset);
+                    offset += p.byteLength;
                 }
-                reader.onerror = (error) => reject(error)
-            })
+                const digest = await crypto.subtle.digest('SHA-256', tmp.buffer);
+                const hex = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+                return hex;
+            };
+
+            const workerLoop = async () => {
+                while (true) {
+                    const i = idx++;
+                    if (i >= files.length) break;
+                    const item = files[i];
+                    try {
+                        const hash = await readSample(item.file);
+                        self.postMessage({ type: 'hash', index: i, name: item.name, hash });
+                    } catch (err) {
+                        self.postMessage({ type: 'error', index: i, name: item.name, error: err.message });
+                    }
+                }
+            };
+
+            const workers = [];
+            for (let w = 0; w < Math.min(concurrency, files.length); w++) {
+                workers.push(workerLoop());
+            }
+            await Promise.all(workers);
+            self.postMessage({ type: 'done' });
+        };
+        `
+
+        const hashBlob = new Blob([hashWorkerScript], { type: 'application/javascript' });
+        const hashWorkerUrl = URL.createObjectURL(hashBlob);
+        const hashWorker = new Worker(hashWorkerUrl);
+
+        const hashes: { index: number; name: string; hash: string }[] = []
+        const errors: any[] = []
+
+        const hashPromise = new Promise<void>((resolve, reject) => {
+            hashWorker.onmessage = (e) => {
+                const data = e.data;
+                if (data.type === 'hash') {
+                    hashes.push({ index: data.index, name: data.name, hash: data.hash });
+                } else if (data.type === 'error') {
+                    errors.push({ index: data.index, name: data.name, error: data.error });
+                } else if (data.type === 'done') {
+                    resolve();
+                }
+            };
+            hashWorker.onerror = (err) => reject(err);
         })
 
-        const emojisData = await Promise.all(filesToUpload)
-        await send('emojiluna/addEmojis', emojisData, form.aiAnalysis)
+        // Start hashing
+        hashWorker.postMessage({ files: filesRaw, sampleSize: 10240, concurrency: 4 });
+        await hashPromise;
+        hashWorker.terminate();
+        URL.revokeObjectURL(hashWorkerUrl);
+
+        if (errors.length > 0) {
+            console.warn('Some hash calculations failed:', errors);
+        }
+
+        // Deduplicate by hash within this batch
+        const seen = new Map<string, number>();
+        const uniqueFiles: typeof filesRaw = [];
+        const duplicates: string[] = [];
+        // Map index -> hash
+        const indexHash = new Map<number, string>();
+        for (const h of hashes) indexHash.set(h.index, h.hash);
+
+        filesRaw.forEach((item, i) => {
+            const hash = indexHash.get(i);
+            if (!hash) {
+                uniqueFiles.push(item);
+                return;
+            }
+            if (!seen.has(hash)) {
+                seen.set(hash, i);
+                uniqueFiles.push(item);
+            } else {
+                duplicates.push(item.name);
+            }
+        });
+
+        if (duplicates.length > 0) {
+            ElMessage.info(`已在本次选择中去重 ${duplicates.length} 个重复文件`) 
+        }
+
+        // 2) 准备上传唯一文件，使用原有的 upload worker 机制
+        const baseUrl = await send('emojiluna/getBaseUrl')
+        let uploadUrl = `${baseUrl}/upload`
+        if (!uploadUrl.startsWith('http')) {
+            uploadUrl = new URL(uploadUrl, window.location.origin).toString()
+        }
+
+        const concurrency = 4 // Browser concurrency for uploads
+        const files = uniqueFiles.map(f => ({
+            name: f.name,
+            category: f.category,
+            tags: f.tags,
+            aiAnalysis: f.aiAnalysis,
+            file: f.file
+        }))
+
+        const workerScript = `
+        self.onmessage = async (e) => {
+            const { files, url, concurrency } = e.data;
+            let active = 0;
+            let index = 0;
+            let completed = 0;
+            let errors = [];
+
+            const processNext = async () => {
+                if (index >= files.length) return;
+                const currentIndex = index++;
+                const item = files[currentIndex];
+                active++;
+
+                try {
+                    const formData = new FormData();
+                    formData.append('file', item.file);
+                    formData.append('name', item.name);
+                    formData.append('category', item.category);
+                    formData.append('tags', item.tags);
+                    formData.append('aiAnalysis', item.aiAnalysis);
+
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                         const text = await response.text();
+                         throw new Error(\`Upload failed: \${response.status} \${text}\`);
+                    }
+                    self.postMessage({ type: 'progress', current: ++completed, total: files.length });
+                } catch (err) {
+                    errors.push({ file: item.name, error: err.message });
+                    console.error(\`Upload error for \${item.name}:\`, err);
+                } finally {
+                    active--;
+                    if (index < files.length) {
+                        processNext();
+                    } else if (active === 0) {
+                        self.postMessage({ type: 'done', errors });
+                    }
+                }
+            };
+
+            for (let i = 0; i < Math.min(concurrency, files.length); i++) {
+                processNext();
+            }
+        };
+        `
+
+        const blob = new Blob([workerScript], { type: 'application/javascript' });
+        const workerUrl = URL.createObjectURL(blob);
+        const worker = new Worker(workerUrl);
+
+        return new Promise<void>((resolve, reject) => {
+            worker.onmessage = (e) => {
+                const { type, current, total, errors } = e.data;
+                if (type === 'progress') {
+                    // update UI if needed
+                } else if (type === 'done') {
+                    worker.terminate();
+                    URL.revokeObjectURL(workerUrl);
+                    if (errors && errors.length > 0) {
+                        console.warn('Some uploads failed:', errors);
+                        ElMessage.warning(`部分上传失败: ${errors.length} 个文件`);
+                    }
+                    resolve();
+                }
+            };
+
+            worker.onerror = (err) => {
+                worker.terminate();
+                URL.revokeObjectURL(workerUrl);
+                reject(err);
+            };
+
+            worker.postMessage({ files, url: uploadUrl, concurrency });
+        });
+
+    } catch (err) {
+        console.error('Upload worker setup failed:', err);
+        throw err;
     }
 }
 

@@ -13,6 +13,13 @@
                 @error="handleImageError"
             />
 
+            <!-- Status Indicator -->
+            <div v-if="status" class="status-indicator" :data-status="status" aria-hidden>
+                <span class="status-backdrop" aria-hidden></span>
+                <span class="status-dot" aria-hidden></span>
+                <span v-if="status === 'error'" class="status-symbol" aria-hidden>×</span>
+            </div>
+
             <!-- Selection Indicator -->
             <div v-if="selectable" class="selection-indicator">
                 <el-icon v-if="selected" class="check-icon"><Check /></el-icon>
@@ -58,6 +65,7 @@ interface Props {
     baseUrl?: string
     selectable?: boolean
     selected?: boolean
+    status?: 'pending' | 'success' | 'error'
 }
 
 interface Emits {
@@ -205,6 +213,67 @@ const handleClick = () => {
     color: white;
     font-size: 14px;
     font-weight: bold;
+}
+
+/* Status Indicator: backdrop + colored dot + optional symbol */
+.status-indicator {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    z-index: 4;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.status-indicator .status-backdrop {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.55);
+    top: 0;
+    left: 0;
+}
+
+.status-indicator .status-dot {
+    position: relative;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    border: 1px solid white;
+    box-sizing: border-box;
+}
+
+.status-indicator[data-status="pending"] .status-dot {
+    background-color: var(--status-pending-color, #FFC107);
+    animation: status-breathing 2s infinite ease-in-out;
+}
+
+.status-indicator[data-status="success"] .status-dot {
+    background-color: var(--status-success-color, #28A745);
+}
+
+.status-indicator[data-status="error"] .status-dot {
+    background-color: var(--status-error-color, #DC3545);
+}
+
+.status-indicator .status-symbol {
+    position: absolute;
+    color: white;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+@keyframes status-breathing {
+    0% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.6; transform: scale(1.1); }
+    100% { opacity: 1; transform: scale(1); }
 }
 
 @media (max-width: 768px) {

@@ -181,6 +181,37 @@ ${IMAGE_CONTENT_TYPES.map((item) => `- ${item.type}: ${item.label} - ${item.desc
     }).description('API 配置'),
 
     Schema.object({
+        batchSize: Schema.number()
+            .description('批量处理大小（上传/分析）')
+            .min(1)
+            .max(20)
+            .default(6),
+        aiConcurrency: Schema.number()
+            .description('AI 分析并发数')
+            .min(1)
+            .max(10)
+            .default(3),
+        aiBatchDelay: Schema.number()
+            .description('AI 批次间延迟(ms)')
+            .min(0)
+            .max(5000)
+            .default(300),
+        aiMaxAttempts: Schema.number()
+            .description('AI 分析最大重试次数')
+            .min(1)
+            .max(10)
+            .default(3),
+        aiBackoffBase: Schema.number()
+            .description('AI 重试退避基数(ms)')
+            .min(100)
+            .max(10000)
+            .default(1000),
+        persistAiTasks: Schema.boolean()
+            .description('是否持久化 AI 任务到数据库')
+            .default(true)
+    }).description('性能与并发配置'),
+
+    Schema.object({
         minEmojiSize: Schema.number()
             .description('单个表情包最小大小(KB)')
             .min(1)
@@ -264,6 +295,13 @@ export interface Config {
     >
     enableImageTypeFilter: boolean
     acceptedImageTypes: ImageContentType[]
+    // Performance & Concurrency
+    batchSize: number
+    aiConcurrency: number
+    aiBatchDelay: number
+    aiMaxAttempts: number
+    aiBackoffBase: number
+    persistAiTasks: boolean
 }
 
 export const name = 'emojiluna'

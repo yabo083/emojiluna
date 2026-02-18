@@ -1,4 +1,4 @@
-import { Context, Service } from 'koishi'
+import { Context, Service, $ } from 'koishi'
 import { Config } from './config'
 import {
     AIAnalyzeResult,
@@ -25,12 +25,19 @@ import {
 import { extractSampledFrames, getImageMetadata } from './imageProcessor'
 import path from 'path'
 import fs from 'fs/promises'
-import { randomUUID } from 'crypto'
+import { randomUUID, createHash } from 'crypto'
 import { parseRawModelName } from 'koishi-plugin-chatluna/llm-core/utils/count_tokens'
 import { ChatLunaChatModel } from 'koishi-plugin-chatluna/llm-core/platform/model'
 import { HumanMessage, SystemMessage } from '@langchain/core/messages'
 import { getMessageContent } from 'koishi-plugin-chatluna/utils/string'
 import { ComputedRef } from 'koishi-plugin-chatluna'
+
+const AI_TASK_STATUS = {
+    PENDING: 'pending',
+    PROCESSING: 'processing',
+    SUCCEEDED: 'succeeded',
+    FAILED: 'failed'
+} as const
 
 export class EmojiLunaService extends Service {
     private static readonly AI_FRAME_SAMPLES = 3
@@ -40,6 +47,13 @@ export class EmojiLunaService extends Service {
     private _isInitialized = false
     private _readyPromise: Promise<void>
     private _readyResolve: () => void
+    private _aiTaskLoopRunning = false
+    private _aiPaused = false
+    private _isDisposed = false
+    private _runtimeConfig = {
+        concurrency: 0, // 0 means use config default
+        batchDelay: -1  // -1 means use config default
+    }
 
     constructor(
         ctx: Context,
@@ -55,6 +69,7 @@ export class EmojiLunaService extends Service {
             await this.initializeAI()
             this._isInitialized = true
             this._readyResolve()
+            this.startAiTaskProcessor()
         })
     }
 
@@ -78,6 +93,7 @@ export class EmojiLunaService extends Service {
         await this.loadCategories()
 
         this.ctx.on('dispose', () => {
+            this._isDisposed = true
             this._emojiStorage = {}
             this._categories = {}
             this._model = null
@@ -302,6 +318,123 @@ export class EmojiLunaService extends Service {
         }
     }
 
+    private calculateFileHash(buffer: Buffer): string {
+        return createHash('sha256').update(buffer).digest('hex')
+    }
+
+    async addEmojiFromPath(
+        options: EmojiAddOptions,
+        sourcePath: string,
+        aiAnalysis: boolean = this.config.autoAnalyze
+    ): Promise<EmojiItem> {
+        const id = randomUUID()
+        const imageBuffer = await fs.readFile(sourcePath)
+        const mimeType = getImageType(imageBuffer)
+        const extension = getImageType(imageBuffer, true)
+        const fileName = `${id}.${extension}`
+        const storageDir = path.resolve(
+            this.ctx.baseDir,
+            this.config.storagePath
+        )
+        const destPath = path.join(storageDir, fileName)
+
+        await fs.mkdir(storageDir, { recursive: true })
+        
+        // Move file (handle cross-device EXDEV)
+        try {
+            await fs.rename(sourcePath, destPath)
+        } catch (error) {
+            if (error.code === 'EXDEV') {
+                await fs.copyFile(sourcePath, destPath)
+                await fs.unlink(sourcePath)
+            } else {
+                throw error
+            }
+        }
+
+        let finalOptions = { ...options }
+        const imageHash = this.calculateFileHash(imageBuffer)
+
+        // 自动按哈希检测重复：若已存在相同内容的表情包则拒绝添加并清理已移动的文件
+        try {
+            const existing = await this.ctx.database.get('emojiluna_emojis', { image_hash: imageHash })
+            if (existing.length > 0) {
+                try {
+                    await fs.unlink(destPath)
+                } catch (_) {}
+                throw new Error(`表情包已存在: 与现有表情包 ${existing[0].name} 重复`)
+            }
+        } catch (e) {
+            // 如果数据库查询本身出错，则继续抛出错误
+            if (e instanceof Error && e.message.startsWith('表情包已存在')) throw e
+            this.ctx.logger.warn(`Duplicate check failed: ${e?.message || e}`)
+        }
+
+        // Try cache lookup first if AI is requested
+        let aiTaskCreated = false
+        if (aiAnalysis) {
+             const cachedResult = await this.ctx.database.get('emojiluna_ai_results', imageHash)
+             if (cachedResult && cachedResult.length > 0) {
+                 try {
+                     const result = JSON.parse(cachedResult[0].result_json) as AIAnalyzeResult
+                     finalOptions = {
+                        name: result.name || options.name,
+                        category: result.category || options.category || '其他',
+                        tags: [...new Set([...(options.tags || []), ...result.tags])],
+                        description: result.description
+                    }
+                 } catch (e) {
+                     this.ctx.logger.warn(`Failed to parse cached AI result: ${e.message}`)
+                 }
+             } else if (this.config.persistAiTasks) {
+                 // Create task
+                 await this.ctx.database.create('emojiluna_ai_tasks', {
+                     id: randomUUID(),
+                     emoji_id: id,
+                     image_path: destPath,
+                     image_hash: imageHash,
+                     status: AI_TASK_STATUS.PENDING,
+                     created_at: Date.now(),
+                     updated_at: Date.now(),
+                     attempts: 0
+                 })
+                 aiTaskCreated = true
+             }
+        }
+
+        const emoji: EmojiItem = {
+            id,
+            name: finalOptions.name,
+            category: finalOptions.category || '其他',
+            path: destPath,
+            size: imageBuffer.length,
+            mimeType,
+            createdAt: new Date(),
+            tags: finalOptions.tags || []
+        }
+
+        this._emojiStorage[id] = emoji
+
+        await this.ctx.database.upsert('emojiluna_emojis', [
+            {
+                id: emoji.id,
+                name: emoji.name,
+                category: emoji.category,
+                path: emoji.path,
+                size: emoji.size,
+                mime_type: emoji.mimeType,
+                created_at: emoji.createdAt,
+                tags: JSON.stringify(emoji.tags),
+                image_hash: imageHash
+            }
+        ])
+
+        await this.updateCategoryEmojiCount(emoji.category)
+        this.ctx.emit('emojiluna/emoji-added', emoji)
+
+        return emoji
+    }
+
     async addEmoji(
         options: EmojiAddOptions,
         imageData: Buffer,
@@ -318,11 +451,56 @@ export class EmojiLunaService extends Service {
         const filePath = path.join(storageDir, fileName)
 
         await fs.mkdir(storageDir, { recursive: true })
+
+        // 在写入文件前计算哈希并检查重复，避免写入重复文件
+        const imageHash = this.calculateFileHash(imageData)
+        try {
+            const existing = await this.ctx.database.get('emojiluna_emojis', { image_hash: imageHash })
+            if (existing.length > 0) {
+                throw new Error(`表情包已存在: 与现有表情包 ${existing[0].name} 重复`)
+            }
+        } catch (e) {
+            if (e instanceof Error && e.message.startsWith('表情包已存在')) throw e
+            this.ctx.logger.warn(`Duplicate check failed: ${e?.message || e}`)
+        }
+
         await fs.writeFile(filePath, imageData)
 
         let finalOptions = { ...options }
 
-        if (aiAnalysis) {
+        if (aiAnalysis && this.config.persistAiTasks) {
+            // New logic: Check cache or queue task
+            const imageHash = this.calculateFileHash(imageData)
+            const cachedResult = await this.ctx.database.get('emojiluna_ai_results', imageHash)
+            
+            if (cachedResult && cachedResult.length > 0) {
+                 try {
+                     const result = JSON.parse(cachedResult[0].result_json) as AIAnalyzeResult
+                     finalOptions = {
+                        name: result.name || options.name,
+                        category: result.category || options.category || '其他',
+                        tags: [...new Set([...(options.tags || []), ...result.tags])],
+                        description: result.description
+                    }
+                 } catch (e) {
+                     this.ctx.logger.warn(`Failed to parse cached AI result: ${e.message}`)
+                 }
+            } else {
+                 // Create pending task
+                 await this.ctx.database.create('emojiluna_ai_tasks', {
+                     id: randomUUID(),
+                     emoji_id: id,
+                     image_path: filePath,
+                     image_hash: imageHash,
+                     status: AI_TASK_STATUS.PENDING,
+                     created_at: Date.now(),
+                     updated_at: Date.now(),
+                     attempts: 0
+                 })
+                 // We don't wait for analysis here, return immediately with original options
+            }
+        } else if (aiAnalysis) {
+            // Legacy blocking analysis (if persistence disabled)
             const imageBase64 = imageData.toString('base64')
             const aiResult = await this.analyzeEmoji(imageBase64)
             if (aiResult) {
@@ -369,7 +547,8 @@ export class EmojiLunaService extends Service {
                 size: emoji.size,
                 mime_type: emoji.mimeType,
                 created_at: emoji.createdAt,
-                tags: JSON.stringify(emoji.tags)
+                tags: JSON.stringify(emoji.tags),
+                image_hash: imageHash
             }
         ])
 
@@ -1055,6 +1234,250 @@ export class EmojiLunaService extends Service {
         }
     }
 
+    private async getDuplicateReason(
+        imageBase64: string,
+        emojiId: string
+    ): Promise<string | null> {
+        const buffer = Buffer.from(imageBase64, 'base64')
+        const hash = this.calculateFileHash(buffer)
+
+        const existing = await this.ctx.database.get('emojiluna_emojis', {
+            id: { $ne: emojiId },
+            image_hash: hash
+        })
+
+        if (existing.length > 0) {
+            return `与现有表情包 ${existing[0].name} 重复`
+        }
+
+        return null
+    }
+
+    async getAiTaskStats() {
+        const [pending, processing, succeeded, failed] = await Promise.all([
+            this.ctx.database.select('emojiluna_ai_tasks').where({ status: 'pending' }).execute(row => $.count(row.id)),
+            this.ctx.database.select('emojiluna_ai_tasks').where({ status: 'processing' }).execute(row => $.count(row.id)),
+            this.ctx.database.select('emojiluna_ai_tasks').where({ status: 'succeeded' }).execute(row => $.count(row.id)),
+            this.ctx.database.select('emojiluna_ai_tasks').where({ status: 'failed' }).execute(row => $.count(row.id))
+        ])
+        return { 
+            pending, 
+            processing, 
+            succeeded, 
+            failed,
+            paused: this._aiPaused,
+            runtimeConfig: this._runtimeConfig
+        }
+    }
+
+    public setAiPaused(paused: boolean) {
+        this._aiPaused = paused
+        this.ctx.logger.info(`AI analysis ${paused ? 'paused' : 'resumed'}`)
+    }
+
+    public setRuntimeConfig(config: { concurrency?: number, batchDelay?: number }) {
+        if (config.concurrency !== undefined) this._runtimeConfig.concurrency = config.concurrency
+        if (config.batchDelay !== undefined) this._runtimeConfig.batchDelay = config.batchDelay
+    }
+
+    public async retryFailedTasks(): Promise<number> {
+        const failedTasks = await this.ctx.database.get('emojiluna_ai_tasks', { status: 'failed' })
+        if (failedTasks.length === 0) return 0
+
+        for (const task of failedTasks) {
+            await this.ctx.database.set('emojiluna_ai_tasks', task.id, {
+                status: 'pending',
+                attempts: 0,
+                next_retry_at: Date.now(),
+                updated_at: Date.now()
+            })
+        }
+        return failedTasks.length
+    }
+
+    async reanalyzeBatch(ids: string[]): Promise<number> {
+        let count = 0
+        for (const id of ids) {
+            const emoji = this._emojiStorage[id]
+            if (!emoji) continue
+
+            // Check if task exists
+            const existing = await this.ctx.database.get('emojiluna_ai_tasks', { emoji_id: id, status: 'pending' })
+            if (existing.length > 0) continue
+
+            // Create task
+            const buffer = await fs.readFile(emoji.path)
+            const hash = this.calculateFileHash(buffer)
+
+            await this.ctx.database.create('emojiluna_ai_tasks', {
+                id: randomUUID(),
+                emoji_id: id,
+                image_path: emoji.path,
+                image_hash: hash,
+                status: 'pending',
+                created_at: Date.now(),
+                updated_at: Date.now(),
+                attempts: 0,
+                next_retry_at: 0
+            })
+            count++
+        }
+        return count
+    }
+
+    private async processAiTask(task: any) {
+        try {
+            // Update status to processing
+            await this.ctx.database.set('emojiluna_ai_tasks', task.id, {
+                status: 'processing',
+                updated_at: Date.now()
+            })
+
+            // Read image
+            const buffer = await fs.readFile(task.image_path)
+            const base64 = buffer.toString('base64')
+
+            // Analyze
+            const result = await this.analyzeEmoji(base64)
+            
+            if (result) {
+                // Update emoji info
+                if (task.emoji_id) {
+                    const emoji = this._emojiStorage[task.emoji_id]
+                    if (emoji) {
+                        const newTags = [...new Set([...emoji.tags, ...result.tags])]
+                        await this.updateEmojiInfo(task.emoji_id, {
+                            name: result.name || emoji.name,
+                            category: result.category || emoji.category,
+                            tags: newTags
+                        })
+                    }
+                }
+
+                // Cache result
+                if (task.image_hash) {
+                    await this.ctx.database.upsert('emojiluna_ai_results', [{
+                        hash: task.image_hash,
+                        result_json: JSON.stringify(result),
+                        created_at: Date.now()
+                    }])
+                }
+
+                // Update task success
+                await this.ctx.database.set('emojiluna_ai_tasks', task.id, {
+                    status: 'succeeded',
+                    updated_at: Date.now()
+                })
+            } else {
+                throw new Error('AI Analysis returned null')
+            }
+
+        } catch (err) {
+            const attempts = (task.attempts || 0) + 1
+            const status = attempts >= this.config.aiMaxAttempts ? 'failed' : 'pending'
+            const backoff = this.config.aiBackoffBase * Math.pow(2, attempts - 1)
+            const nextRetry = Date.now() + backoff
+
+            await this.ctx.database.set('emojiluna_ai_tasks', task.id, {
+                status: status,
+                attempts: attempts,
+                last_error: err.message,
+                next_retry_at: nextRetry,
+                updated_at: Date.now()
+            })
+            
+            this.ctx.logger.warn(`AI Task ${task.id} failed (attempt ${attempts}): ${err.message}`)
+        }
+    }
+
+    private async startAiTaskProcessor() {
+        if (this._aiTaskLoopRunning) return
+        this._aiTaskLoopRunning = true
+        
+        // Reset stuck processing tasks on startup
+        try {
+            await this.ctx.database.set('emojiluna_ai_tasks', { status: 'processing' }, { status: 'pending' })
+            this.ctx.logger.info('AI Task Processor: Reset stuck processing tasks to pending')
+        } catch (e) {
+            this.ctx.logger.warn(`AI Task Processor: Failed to reset tasks: ${e.message}`)
+        }
+
+        this.ctx.logger.info('AI Task Processor loop started')
+        
+        while (!this._isDisposed) {
+            try {
+                // 1. Check pause/config
+                if (!this.config.persistAiTasks || this._aiPaused) {
+                    await new Promise(resolve => setTimeout(resolve, 2000))
+                    continue
+                }
+
+                // 2. Determine limits
+                const concurrency = this._runtimeConfig.concurrency > 0 
+                    ? this._runtimeConfig.concurrency 
+                    : this.config.aiConcurrency
+                
+                // 3. Count active tasks
+                const processingCount = await this.ctx.database.select('emojiluna_ai_tasks')
+                                            .where({ status: 'processing' })
+                                            .execute(row => $.count(row.id))
+
+                if (processingCount >= concurrency) {
+                    await new Promise(resolve => setTimeout(resolve, 1000))
+                    continue
+                }
+
+                // 4. Fetch available tasks
+                const tasks = await this.ctx.database.get('emojiluna_ai_tasks', {
+                    status: 'pending',
+                    next_retry_at: { $lte: Date.now() }
+                }, {
+                    limit: concurrency - processingCount,
+                    sort: { created_at: 'asc' }
+                })
+
+                if (tasks.length === 0) {
+                    await new Promise(resolve => setTimeout(resolve, 2000))
+                    continue
+                }
+
+                this.ctx.logger.info(`AI Task Processor: Starting ${tasks.length} tasks`)
+
+                // 5. Start tasks
+                for (const task of tasks) {
+                    if (this._aiPaused || this._isDisposed) break
+                    
+                    this.processAiTask(task).catch(err => {
+                        this.ctx.logger.error(`Task ${task.id} unexpected error: ${err.message}`)
+                    })
+                    
+                    // Delay between starts
+                    const delay = this._runtimeConfig.batchDelay >= 0
+                        ? this._runtimeConfig.batchDelay
+                        : this.config.aiBatchDelay
+                        
+                    if (delay > 0) {
+                         await new Promise(resolve => setTimeout(resolve, delay))
+                    }
+                }
+
+                // Short sleep to allow DB updates to propagate
+                await new Promise(resolve => setTimeout(resolve, 100))
+
+            } catch (err) {
+                this.ctx.logger.error(`AI Loop error: ${err.message}`)
+                await new Promise(resolve => setTimeout(resolve, 5000))
+            }
+        }
+        
+        this.ctx.logger.info('AI Task Processor loop stopped')
+    }
+
+    public updateConfig(config: Config) {
+        this.config = config
+        this.ctx.logger.info('EmojiLuna 配置已更新')
+    }
+
     static inject = ['database', 'chatluna']
 }
 
@@ -1069,7 +1492,8 @@ function defineDatabase(ctx: Context) {
             size: { type: 'integer' },
             mime_type: { type: 'string', length: 50 },
             created_at: { type: 'timestamp' },
-            tags: { type: 'string' }
+            tags: { type: 'string' },
+            image_hash: { type: 'string', length: 64 }
         },
         {
             autoInc: false,
@@ -1091,38 +1515,39 @@ function defineDatabase(ctx: Context) {
             primary: 'id'
         }
     )
+
+    ctx.database.extend(
+        'emojiluna_ai_tasks',
+        {
+            id: 'string',
+            emoji_id: 'string',
+            image_path: 'string',
+            image_hash: 'string',
+            status: 'string', // 'pending', 'processing', 'succeeded', 'failed'
+            attempts: 'integer',
+            last_error: 'string',
+            next_retry_at: 'integer', // timestamp ms
+            created_at: 'integer', // timestamp ms
+            updated_at: 'integer' // timestamp ms
+        },
+        {
+            primary: 'id',
+            autoInc: false
+        }
+    )
+
+    ctx.database.extend(
+        'emojiluna_ai_results',
+        {
+            hash: 'string',
+            result_json: 'text',
+            created_at: 'integer' // timestamp ms
+        },
+        {
+            primary: 'hash',
+            autoInc: false
+        }
+    )
 }
 
-declare module 'koishi' {
-    interface Context {
-        emojiluna: EmojiLunaService
-    }
 
-    interface Tables {
-        emojiluna_emojis: {
-            id: string
-            name: string
-            category: string
-            path: string
-            size: number
-            mime_type: string
-            created_at: Date
-            tags: string
-        }
-        emojiluna_categories: {
-            id: string
-            name: string
-            description: string
-            emoji_count: number
-            created_at: Date
-        }
-    }
-
-    interface Events {
-        'emojiluna/emoji-added': (emoji: EmojiItem) => void
-        'emojiluna/emoji-deleted': (id: string) => void
-        'emojiluna/emoji-updated': (emoji: EmojiItem) => void
-        'emojiluna/category-added': (category: Category) => void
-        'emojiluna/category-deleted': (id: string) => void
-    }
-}
