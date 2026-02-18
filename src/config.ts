@@ -177,8 +177,10 @@ ${IMAGE_CONTENT_TYPES.map((item) => `- ${item.type}: ${item.label} - ${item.desc
             .default(false),
         backendPath: Schema.string()
             .description('后端服务器路径')
-            .default('/emojiluna')
+            .default('/emojiluna'),
+        uploadToken: Schema.string().description('上传接口 API Token（可选）').default('')
     }).description('API 配置'),
+    
 
     Schema.object({
         batchSize: Schema.number()
@@ -289,6 +291,7 @@ export interface Config {
     injectVariablesLimit: number
     backendServer: boolean
     backendPath: string
+    uploadToken: string
     groupAutoCollectLimit: Record<
         string,
         { hourLimit: number; dayLimit: number }

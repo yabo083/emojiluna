@@ -30,7 +30,7 @@
         "@jimp/core": "^1.6.0",
         "@koishijs/plugin-console": "^5.30.11",
         "@langchain/core": "^0.3.80",
-        "formidable": "^3.5.1",
+        "formidable": "^3.5.4",
         "gifuct-js": "^2.1.2",
         "jimp": "^1.6.0",
         "vue-i18n": "^11.1.12",

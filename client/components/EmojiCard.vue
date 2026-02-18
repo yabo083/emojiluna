@@ -17,7 +17,7 @@
             <div v-if="status" class="status-indicator" :data-status="status" aria-hidden>
                 <span class="status-backdrop" aria-hidden></span>
                 <span class="status-dot" aria-hidden></span>
-                <span v-if="status === 'error'" class="status-symbol" aria-hidden>×</span>
+                <span v-if="status === 'failed'" class="status-symbol" aria-hidden>×</span>
             </div>
 
             <!-- Selection Indicator -->
@@ -65,7 +65,7 @@ interface Props {
     baseUrl?: string
     selectable?: boolean
     selected?: boolean
-    status?: 'pending' | 'success' | 'error'
+    status?: 'pending' | 'succeeded' | 'failed'
 }
 
 interface Emits {
@@ -84,7 +84,7 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<Emits>()
 
 const emojiUrl = computed(() => {
-    return `${props.baseUrl}/get/${props.emoji.name}`
+    return `${props.baseUrl}/get/${props.emoji.id}`
 })
 
 const handleImageError = (event: Event) => {
@@ -253,12 +253,11 @@ const handleClick = () => {
     background-color: var(--status-pending-color, #FFC107);
     animation: status-breathing 2s infinite ease-in-out;
 }
-
-.status-indicator[data-status="success"] .status-dot {
+.status-indicator[data-status="succeeded"] .status-dot {
     background-color: var(--status-success-color, #28A745);
 }
 
-.status-indicator[data-status="error"] .status-dot {
+.status-indicator[data-status="failed"] .status-dot {
     background-color: var(--status-error-color, #DC3545);
 }
 

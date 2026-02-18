@@ -218,6 +218,9 @@ import { ElMessage, type UploadUserFile } from 'element-plus'
 import { UploadFilled, Plus, QuestionFilled, Link, MagicStick, Picture } from '@element-plus/icons-vue'
 import type { Category, EmojiAddOptions } from 'koishi-plugin-emojiluna'
 
+import HashWorker from '../workers/hash.worker?worker&inline'
+import UploadWorker from '../workers/upload.worker?worker&inline'
+
 interface Props {
     modelValue: boolean
     defaultCategory?: string
@@ -299,7 +302,7 @@ const checkUrlPreview = () => {
 
 const handleUrlError = () => {
     urlPreview.value = false
-    ElMessage.warning('图片URL无效或无法加载')
+    ElMessage.warning(t('emojiluna.urlInvalid'))
 }
 
 const handleSubmit = async () => {
@@ -307,18 +310,30 @@ const handleSubmit = async () => {
 
     try {
         if (activeTab.value === 'upload') {
-            await submitFile()
+            const result = await submitFile()
+            // If any upload errors occurred, show only the failed notification and do not show success
+            if (result && result.errors && result.errors.length > 0) {
+                const failed = result.errors.map((it: any) => it.file || it.fileName || it.file || 'unknown')
+                ElMessage.warning(t('emojiluna.uploadPartialFailed', { 
+                    count: result.errors.length,
+                    files: failed.slice(0, 5).join(', ') + (failed.length > 5 ? '...' : '')
+                }))
+                // keep dialog open to allow retry or user action
+            } else {
+                if (form.aiAnalysis) {
+                    ElMessage.success(t('emojiluna.uploadSuccessAi'))
+                } else {
+                    ElMessage.success(t('emojiluna.addSuccess'))
+                }
+                emit('success')
+                handleClose()
+            }
         } else {
             await submitUrl()
-        }
-
-        if (activeTab.value === 'upload' && form.aiAnalysis) {
-            ElMessage.success('上传成功，AI正在后台分析，请稍后再使用最新分类/标签检索')
-        } else {
             ElMessage.success(t('emojiluna.addSuccess'))
+            emit('success')
+            handleClose()
         }
-        emit('success')
-        handleClose()
     } catch (error) {
         console.error('Failed to add emoji:', error)
         ElMessage.error(t('emojiluna.addFailed'))
@@ -335,96 +350,37 @@ const submitFile = async () => {
         const filesRaw = fileList.value.filter(f => f.raw).map(f => ({
             name: f.name.replace(/\.[^/.]+$/, ''),
             file: f.raw,
-            category: form.category || '其他',
+            category: form.category || t('emojiluna.defaultCategory'),
             tags: JSON.stringify(form.tags),
             aiAnalysis: form.aiAnalysis
         }))
 
-        // Hash worker: 使用 crypto.subtle.digest 和采样（head/mid/tail）以降低 IO
-        const hashWorkerScript = `
-        self.onmessage = async (e) => {
-            const { files, sampleSize = 10240, concurrency = 4 } = e.data;
-            const results = [];
-            let idx = 0;
-
-            const readSample = async (file) => {
-                const size = file.size;
-                const needFull = size <= sampleSize * 3;
-                const parts = [];
-                if (needFull) {
-                    parts.push(await file.arrayBuffer());
-                } else {
-                    const head = file.slice(0, sampleSize);
-                    const tail = file.slice(size - sampleSize, size);
-                    const midStart = Math.max(Math.floor(size / 2) - Math.floor(sampleSize / 2), sampleSize);
-                    const mid = file.slice(midStart, midStart + sampleSize);
-                    parts.push(await head.arrayBuffer());
-                    parts.push(await mid.arrayBuffer());
-                    parts.push(await tail.arrayBuffer());
-                }
-                // concat
-                let totalLen = 0;
-                for (const p of parts) totalLen += p.byteLength;
-                const tmp = new Uint8Array(totalLen);
-                let offset = 0;
-                for (const p of parts) {
-                    tmp.set(new Uint8Array(p), offset);
-                    offset += p.byteLength;
-                }
-                const digest = await crypto.subtle.digest('SHA-256', tmp.buffer);
-                const hex = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
-                return hex;
-            };
-
-            const workerLoop = async () => {
-                while (true) {
-                    const i = idx++;
-                    if (i >= files.length) break;
-                    const item = files[i];
-                    try {
-                        const hash = await readSample(item.file);
-                        self.postMessage({ type: 'hash', index: i, name: item.name, hash });
-                    } catch (err) {
-                        self.postMessage({ type: 'error', index: i, name: item.name, error: err.message });
-                    }
-                }
-            };
-
-            const workers = [];
-            for (let w = 0; w < Math.min(concurrency, files.length); w++) {
-                workers.push(workerLoop());
-            }
-            await Promise.all(workers);
-            self.postMessage({ type: 'done' });
-        };
-        `
-
-        const hashBlob = new Blob([hashWorkerScript], { type: 'application/javascript' });
-        const hashWorkerUrl = URL.createObjectURL(hashBlob);
-        const hashWorker = new Worker(hashWorkerUrl);
+        // Initialize Hash Worker
+        const hashWorker = new HashWorker()
+        const hashBlobUrl: string | null = null
 
         const hashes: { index: number; name: string; hash: string }[] = []
         const errors: any[] = []
 
         const hashPromise = new Promise<void>((resolve, reject) => {
-            hashWorker.onmessage = (e) => {
-                const data = e.data;
+            hashWorker.onmessage = (e: any) => {
+                const data = e.data
                 if (data.type === 'hash') {
-                    hashes.push({ index: data.index, name: data.name, hash: data.hash });
+                    hashes.push({ index: data.index, name: data.name, hash: data.hash })
                 } else if (data.type === 'error') {
-                    errors.push({ index: data.index, name: data.name, error: data.error });
+                    errors.push({ index: data.index, name: data.name, error: data.error })
                 } else if (data.type === 'done') {
-                    resolve();
+                    resolve()
                 }
-            };
-            hashWorker.onerror = (err) => reject(err);
+            }
+            hashWorker.onerror = (err) => reject(err)
         })
 
         // Start hashing
-        hashWorker.postMessage({ files: filesRaw, sampleSize: 10240, concurrency: 4 });
-        await hashPromise;
-        hashWorker.terminate();
-        URL.revokeObjectURL(hashWorkerUrl);
+        hashWorker.postMessage({ files: filesRaw, sampleSize: 10240, concurrency: 4 })
+        await hashPromise
+        hashWorker.terminate()
+        if (hashBlobUrl) URL.revokeObjectURL(hashBlobUrl)
 
         if (errors.length > 0) {
             console.warn('Some hash calculations failed:', errors);
@@ -453,7 +409,7 @@ const submitFile = async () => {
         });
 
         if (duplicates.length > 0) {
-            ElMessage.info(`已在本次选择中去重 ${duplicates.length} 个重复文件`) 
+            ElMessage.info(t('emojiluna.deduplicated', { count: duplicates.length })) 
         }
 
         // 2) 准备上传唯一文件，使用原有的 upload worker 机制
@@ -472,85 +428,33 @@ const submitFile = async () => {
             file: f.file
         }))
 
-        const workerScript = `
-        self.onmessage = async (e) => {
-            const { files, url, concurrency } = e.data;
-            let active = 0;
-            let index = 0;
-            let completed = 0;
-            let errors = [];
+        // Initialize Upload Worker
+        const uploadWorker = new UploadWorker()
+        const uploadBlobUrl: string | null = null
 
-            const processNext = async () => {
-                if (index >= files.length) return;
-                const currentIndex = index++;
-                const item = files[currentIndex];
-                active++;
-
-                try {
-                    const formData = new FormData();
-                    formData.append('file', item.file);
-                    formData.append('name', item.name);
-                    formData.append('category', item.category);
-                    formData.append('tags', item.tags);
-                    formData.append('aiAnalysis', item.aiAnalysis);
-
-                    const response = await fetch(url, {
-                        method: 'POST',
-                        body: formData
-                    });
-
-                    if (!response.ok) {
-                         const text = await response.text();
-                         throw new Error(\`Upload failed: \${response.status} \${text}\`);
-                    }
-                    self.postMessage({ type: 'progress', current: ++completed, total: files.length });
-                } catch (err) {
-                    errors.push({ file: item.name, error: err.message });
-                    console.error(\`Upload error for \${item.name}:\`, err);
-                } finally {
-                    active--;
-                    if (index < files.length) {
-                        processNext();
-                    } else if (active === 0) {
-                        self.postMessage({ type: 'done', errors });
-                    }
-                }
-            };
-
-            for (let i = 0; i < Math.min(concurrency, files.length); i++) {
-                processNext();
-            }
-        };
-        `
-
-        const blob = new Blob([workerScript], { type: 'application/javascript' });
-        const workerUrl = URL.createObjectURL(blob);
-        const worker = new Worker(workerUrl);
-
-        return new Promise<void>((resolve, reject) => {
-            worker.onmessage = (e) => {
-                const { type, current, total, errors } = e.data;
+        return new Promise<{ errors: any[] }>((resolve, reject) => {
+            uploadWorker.onmessage = (e: any) => {
+                const { type, current, total, errors } = e.data
                 if (type === 'progress') {
-                    // update UI if needed
+                    // could update UI progress here
                 } else if (type === 'done') {
-                    worker.terminate();
-                    URL.revokeObjectURL(workerUrl);
+                    uploadWorker.terminate()
+                    if (uploadBlobUrl) URL.revokeObjectURL(uploadBlobUrl)
                     if (errors && errors.length > 0) {
-                        console.warn('Some uploads failed:', errors);
-                        ElMessage.warning(`部分上传失败: ${errors.length} 个文件`);
+                        console.warn('Some uploads failed:', errors)
                     }
-                    resolve();
+                    resolve({ errors: errors || [] })
                 }
-            };
+            }
 
-            worker.onerror = (err) => {
-                worker.terminate();
-                URL.revokeObjectURL(workerUrl);
-                reject(err);
-            };
+            uploadWorker.onerror = (err) => {
+                uploadWorker!.terminate()
+                if (uploadBlobUrl) URL.revokeObjectURL(uploadBlobUrl)
+                reject(err)
+            }
 
-            worker.postMessage({ files, url: uploadUrl, concurrency });
-        });
+            uploadWorker.postMessage({ files, url: uploadUrl, concurrency })
+        })
 
     } catch (err) {
         console.error('Upload worker setup failed:', err);
@@ -559,15 +463,23 @@ const submitFile = async () => {
 }
 
 const submitUrl = async () => {
-    // 从URL下载图片并转换为base64
+    // 从URL下载图片并安全转换为base64（使用 FileReader，避免对大文件使用 String.fromCharCode）
     const response = await fetch(urlForm.url)
-    const buffer = await response.arrayBuffer()
-    const uint8Array = new Uint8Array(buffer)
-    const base64 = btoa(String.fromCharCode.apply(null, Array.from(uint8Array)))
+    if (!response.ok) throw new Error(`Failed to fetch image: ${response.status}`)
+
+    const blob = await response.blob()
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onerror = () => reject(new Error('Failed to read blob as data URL'))
+        reader.onload = () => resolve(reader.result as string)
+        reader.readAsDataURL(blob)
+    })
+
+    const base64 = dataUrl.split(',')[1] || ''
 
     const emojiData = {
         name: urlForm.name,
-        category: urlForm.category || '其他',
+        category: urlForm.category || t('emojiluna.defaultCategory'),
         tags: urlForm.tags,
         imageData: base64,
         mimeType: response.headers.get('content-type') || 'image/png'

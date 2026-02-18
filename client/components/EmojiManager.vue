@@ -72,36 +72,36 @@
 
 
           <!-- AI Stats -->
-          <el-tooltip :content="aiStats.paused ? '任务已暂停' : '点击打开控制台'" placement="bottom">
+          <el-tooltip :content="aiStats.paused ? t('emojiluna.aiPaused') : t('emojiluna.aiConsole')" placement="bottom">
+            <div>
               <el-tag 
                 v-if="totalTasks > 0"
                 :type="statusTagType"
-                style="margin-left: 8px; cursor: pointer; height: 32px; padding: 0 12px;"
+                class="ai-status-tag"
                 effect="light"
                 round
                 @click="aiControlVisible = true"
               >
-                  <div style="display: flex; align-items: center; gap: 6px; font-weight: 500">
+                  <div class="ai-status-tag-content">
                       <!-- Icon Status -->
                       <el-icon v-if="aiStats.paused"><VideoPause /></el-icon>
                       <el-icon v-else-if="aiStats.processing > 0" class="is-loading"><Loading /></el-icon>
                       <el-icon v-else><Check /></el-icon>
 
                       <!-- Text Status -->
-                      <span v-if="aiStats.paused">已暂停</span>
-                      <span v-else-if="aiStats.processing > 0">运行中</span>
-                      <span v-else>空闲</span>
+                      <span v-if="aiStats.paused">{{ t('emojiluna.aiPaused') }}</span>
+                      <span v-else-if="aiStats.processing > 0">{{ t('emojiluna.aiRunning') }}</span>
+                      <span v-else>{{ t('emojiluna.aiIdle') }}</span>
+                  </div>
 
-                      <el-divider direction="vertical" />
-
+                  <div class="ai-status-tag-counts">
                       <!-- Counts -->
-                      <div style="display: flex; gap: 8px; font-size: 12px; opacity: 0.9">
-                          <span title="待处理">待:{{ aiStats.pending }}</span>
-                          <span title="成功">完:{{ aiStats.succeeded }}</span>
-                          <span v-if="aiStats.failed > 0" title="失败" style="font-weight: bold">错:{{ aiStats.failed }}</span>
-                      </div>
+                      <span :title="t('emojiluna.aiPending')">{{ t('emojiluna.aiPending') }}:{{ aiStats.pending }}</span>
+                      <span :title="t('emojiluna.aiSucceeded')">{{ t('emojiluna.aiSucceeded') }}:{{ aiStats.succeeded }}</span>
+                      <span v-if="aiStats.failed > 0" :title="t('emojiluna.aiFailed')" class="failed-count">{{ t('emojiluna.aiFailed') }}:{{ aiStats.failed }}</span>
                   </div>
               </el-tag>
+            </div>
           </el-tooltip>
         </div>
       </div>
@@ -193,15 +193,15 @@
         <div class="selection-actions">
             <el-button type="warning" text bg @click="handleBatchReanalyze">
                 <el-icon><MagicStick /></el-icon>
-                AI 重分析
+                {{ t('emojiluna.batchReanalyze') }}
             </el-button>
              <el-button type="primary" text bg @click="openMoveDialog">
                 <el-icon><FolderOpened /></el-icon>
-                移动到...
+                {{ t('emojiluna.moveTo') }}
             </el-button>
             <el-button type="danger" text bg @click="handleBatchDelete">
                 <el-icon><Delete /></el-icon>
-                删除
+                {{ t('common.delete') }}
             </el-button>
         </div>
       </div>
@@ -228,10 +228,10 @@
     <!-- Move to Category Dialog -->
     <el-dialog
         v-model="showMoveDialog"
-        title="移动到分类"
+        :title="t('emojiluna.moveCategory')"
         width="400px"
     >
-        <el-select v-model="targetCategory" placeholder="选择目标分类" style="width: 100%">
+        <el-select v-model="targetCategory" :placeholder="t('emojiluna.selectTargetCategory')" style="width: 100%">
             <el-option
                 v-for="cat in categories"
                 :key="cat.name"
@@ -241,9 +241,9 @@
         </el-select>
         <template #footer>
             <span class="dialog-footer">
-                <el-button @click="showMoveDialog = false">取消</el-button>
+                <el-button @click="showMoveDialog = false">{{ t('common.cancel') }}</el-button>
                 <el-button type="primary" @click="confirmMove" :loading="moving">
-                    确定
+                    {{ t('common.confirm') }}
                 </el-button>
             </span>
         </template>
@@ -252,7 +252,7 @@
     <!-- Preview Dialog -->
     <el-dialog
       v-model="showPreviewDialog"
-      :title="previewEmoji?.name || '表情包预览'"
+      :title="previewEmoji?.name || t('emojiluna.previewTitle')"
       width="600px"
       @close="handlePreviewClose"
       class="preview-dialog"
@@ -277,19 +277,19 @@
 
           <div class="preview-details">
             <div class="detail-group">
-                <label class="detail-label">名称</label>
+                <label class="detail-label">{{ t('emojiluna.emojiName') }}</label>
                 <div class="detail-value text-strong">{{ previewEmoji?.name }}</div>
             </div>
 
             <div class="detail-group">
-                <label class="detail-label">分类</label>
+                <label class="detail-label">{{ t('emojiluna.category') }}</label>
                 <div class="detail-value">
                      <el-tag effect="light" round>{{ previewEmoji?.category }}</el-tag>
                 </div>
             </div>
 
             <div class="detail-group" v-if="previewEmoji?.tags?.length">
-                <label class="detail-label">标签</label>
+                <label class="detail-label">{{ t('emojiluna.tags.default') }}</label>
                 <div class="detail-value tags-wrapper">
                   <el-tag
                     v-for="tag in previewEmoji.tags"
@@ -306,7 +306,7 @@
             </div>
 
             <div class="detail-group">
-                <label class="detail-label">链接</label>
+                <label class="detail-label">{{ t('emojiluna.link') }}</label>
                 <div class="link-box" @click="copyPreviewLink">
                     <span class="link-text">{{ previewEmojiLink }}</span>
                     <el-icon class="copy-icon"><DocumentCopy /></el-icon>
@@ -329,15 +329,15 @@
                 class="ai-btn"
               >
                 <el-icon><MagicStick /></el-icon>
-                AI 重新分析
+                {{ t('emojiluna.reanalyze') }}
               </el-button>
           </div>
           <div class="footer-right">
               <el-button @click="handlePreviewEdit" round>
                 <el-icon><Edit /></el-icon>
-                编辑
+                {{ t('common.edit') }}
               </el-button>
-              <el-button type="primary" @click="handlePreviewClose" round>关闭</el-button>
+              <el-button type="primary" @click="handlePreviewClose" round>{{ t('common.cancel') }}</el-button>
           </div>
         </div>
       </template>
@@ -346,32 +346,32 @@
 
 
     <!-- AI Control Panel -->
-    <el-dialog v-model="aiControlVisible" title="AI 任务控制台" width="500px">
+    <el-dialog v-model="aiControlVisible" :title="t('emojiluna.aiConsole')" width="500px">
         <el-form label-width="120px">
-            <el-form-item label="任务总开关">
-                <el-switch 
-                    v-model="aiStats.paused" 
-                    active-text="暂停中" 
-                    inactive-text="运行中"
-                    style="--el-switch-on-color: #ff4949; --el-switch-off-color: #13ce66"
-                    @change="val => send('emojiluna/setAiPaused', !!val)"
-                />
+            <el-form-item :label="t('emojiluna.aiTotalSwitch')">
+              <el-switch 
+                v-model="aiStats.paused" 
+                :active-text="t('emojiluna.aiPaused')" 
+                :inactive-text="t('emojiluna.aiRunning')"
+                style="--el-switch-on-color: #ff4949; --el-switch-off-color: #13ce66"
+                @change="onAiPausedChange"
+              />
             </el-form-item>
-            <el-divider>运行时限流 (重启失效)</el-divider>
-            <el-form-item label="并发数">
+            <el-divider>{{ t('emojiluna.aiLimit') }}</el-divider>
+            <el-form-item :label="t('emojiluna.aiConcurrency')">
                 <el-slider v-model="aiConfigForm.concurrency" :min="1" :max="10" show-input />
             </el-form-item>
-            <el-form-item label="批次间隔(ms)">
+            <el-form-item :label="t('emojiluna.aiBatchDelay')">
                 <el-slider v-model="aiConfigForm.batchDelay" :min="0" :max="5000" :step="100" show-input />
             </el-form-item>
             <el-form-item>
-                <el-button type="primary" @click="applyAiConfig">应用配置</el-button>
+                <el-button type="primary" @click="applyAiConfig">{{ t('emojiluna.aiApplyConfig') }}</el-button>
             </el-form-item>
-            <el-divider>故障处理</el-divider>
-            <el-form-item label="失败任务">
+            <el-divider>{{ t('emojiluna.aiErrorHandling') }}</el-divider>
+            <el-form-item :label="t('emojiluna.aiFailedTasks')">
                 <el-tag type="danger">{{ aiStats.failed }}</el-tag>
                 <el-button type="danger" link @click="retryFailedTasks" :disabled="aiStats.failed === 0">
-                    重试所有失败任务
+                    {{ t('emojiluna.aiRetryFailed') }}
                 </el-button>
             </el-form-item>
         </el-form>
@@ -479,12 +479,12 @@ const { isDragSelecting, selectionBox, handleMouseDown } = useDragSelect(
 
 const previewEmojiUrl = computed(() => {
   if (!previewEmoji.value) return ''
-  return `${baseUrl.value}/get/${previewEmoji.value.name}`
+  return `${baseUrl.value}/get/${previewEmoji.value.id}`
 })
 
 const previewEmojiLink = computed(() => {
   if (!previewEmoji.value) return ''
-  return `${baseUrl.value}/get/${previewEmoji.value.name}`
+  return `${baseUrl.value}/get/${previewEmoji.value.id}`
 })
 
 const formatSize = (bytes: number) => {
@@ -500,8 +500,8 @@ const loadEmojis = async () => {
   loading.value = true
   try {
     const options: EmojiSearchOptions = {
-      limit: filterStatus.value === 'all' ? pageSize.value : 1000,
-      offset: filterStatus.value === 'all' ? (currentPage.value - 1) * pageSize.value : 0
+      limit: pageSize.value,
+      offset: (currentPage.value - 1) * pageSize.value
     }
 
     if (selectedCategory.value) {
@@ -519,33 +519,19 @@ const loadEmojis = async () => {
        if (selectedCategory.value) {
             result = result.filter((e: EmojiItem) => e.category === selectedCategory.value)
        }
+       // Client-side pagination for search results
+       total.value = result.length
+       const start = (currentPage.value - 1) * pageSize.value
+       emojis.value = result.slice(start, start + pageSize.value)
     } else {
-      result = await send('emojiluna/getEmojiList', options)
-    }
-
-    // Apply Status Filter
-    if (result && filterStatus.value !== 'all') {
-        if (filterStatus.value === 'unanalyzed') {
-            result = result.filter((e: EmojiItem) => e.tags.length === 0 || (e.tags.length <= 1 && e.category === '其他'))
-        } else if (filterStatus.value === 'analyzed') {
-            result = result.filter((e: EmojiItem) => e.tags.length > 1 || e.category !== '其他')
-        }
-        // Handle client-side pagination for filtered results
-        total.value = result.length
-        const start = (currentPage.value - 1) * pageSize.value
-        emojis.value = result.slice(start, start + pageSize.value)
-    } else {
-        emojis.value = result || []
-        if (filterStatus.value === 'all' && !searchKeyword.value.trim()) {
-             // Ideally get count from API
-             const allEmojis = await send('emojiluna/getEmojiList', {
-                category: selectedCategory.value || undefined,
-                tags: selectedTag.value ? [selectedTag.value] : undefined
-            })
-            total.value = allEmojis?.length || 0
-        } else {
-            total.value = emojis.value.length
-        }
+      // Standard paginated fetch
+      emojis.value = await send('emojiluna/getEmojiList', options)
+      
+      // Fetch total count separately for pagination
+      total.value = await send('emojiluna/getEmojiCount', {
+        category: selectedCategory.value || undefined,
+        tags: selectedTag.value ? [selectedTag.value] : undefined
+      })
     }
 
   } catch (error) {
@@ -617,6 +603,20 @@ const retryFailedTasks = async () => {
     } catch (e) {
         ElMessage.error(`重试失败: ${e.message}`)
     }
+}
+
+const onAiPausedChange = async (val: boolean) => {
+  const prev = aiStats.value.paused
+  // optimistic update already applied by v-model, keep local copy
+  try {
+    await send('emojiluna/setAiPaused', !!val)
+    ElMessage.success(val ? 'AI 已暂停' : 'AI 已恢复')
+    updateAiStats()
+  } catch (e) {
+    // rollback
+    aiStats.value.paused = prev
+    ElMessage.error(`设置失败: ${e?.message || e}`)
+  }
 }
 
 onMounted(() => {
@@ -910,21 +910,21 @@ const handleAIAnalyze = async () => {
 }
 
 // Determine per-emoji status for UI indicator
-const getStatus = (emoji: EmojiItem): 'pending' | 'success' | 'error' | undefined => {
+const getStatus = (emoji: EmojiItem): 'pending' | 'failed' | undefined => {
   // If this emoji is currently being categorized in preview, mark as pending
   if (aiCategorizingId.value && emoji.id === aiCategorizingId.value) return 'pending'
 
-  // If backend reports a failed AI task for this emoji, mark as error
-  if (failedEmojiIds.value && failedEmojiIds.value.has(emoji.id)) return 'error'
+  // If backend reports a failed AI task for this emoji, mark as failed
+  if (failedEmojiIds.value && failedEmojiIds.value.has(emoji.id)) return 'failed'
 
   // Heuristic: mark as pending when it appears unanalyzed
   if ((!emoji.tags || emoji.tags.length === 0) && (!emoji.category || emoji.category === '其他')) return 'pending'
 
-  // Otherwise treat as success (analyzed)
-  return 'success'
+  // Otherwise treat as succeeded (analyzed)
+  return undefined
 }
 
-onMounted(refreshData)
+// onMounted(refreshData) -- call handled above in initialization that also updates AI stats
 </script>
 
 <style scoped>
@@ -974,11 +974,36 @@ onMounted(refreshData)
   margin-left: auto;
 }
 
-.active-filters {
+.ai-status-tag {
+    margin-left: 8px;
+    cursor: pointer;
+    height: 32px;
+    padding: 0 12px;
+}
+
+.ai-status-tag-content {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 500;
+}
+
+.ai-status-tag-counts {
     display: flex;
     gap: 8px;
-    margin-top: 8px;
-    flex-wrap: wrap;
+    font-size: 12px;
+    opacity: 0.9;
+}
+
+.ai-status-tag-counts .failed-count {
+    font-weight: bold;
+}
+
+.active-filters {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
 }
 
 .emoji-grid-container {

@@ -89,6 +89,7 @@ declare module '@koishijs/console' {
             paused: boolean
             runtimeConfig: { concurrency: number; batchDelay: number }
         }>
+        'emojiluna/getEmojiCount': (options: any) => Promise<number>
         'emojiluna/getFailedAiEmojiIds': () => Promise<string[]>
         'emojiluna/reanalyzeBatch': (ids: string[]) => Promise<number>
         'emojiluna/setAiPaused': (paused: boolean) => void
